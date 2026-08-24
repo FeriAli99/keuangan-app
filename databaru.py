@@ -38,12 +38,9 @@ def save_transaksi(df):
 def save_kategori(df):
     conn.update(worksheet="Kategori", data=df)
 
-# Init State
-if 'df_transaksi' not in st.session_state:
-    st.session_state.df_transaksi = load_transaksi()
-
-if 'df_kategori' not in st.session_state:
-    st.session_state.df_kategori = load_kategori()
+# --- BACA DATA REALTIME SETIAP Halaman di-Refresh ---
+df_transaksi = load_transaksi()
+df_kategori = load_kategori()
 
 # Navigation Tabs
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -67,7 +64,7 @@ with tab1:
     
     month_idx = BULAN_LIST.index(selected_month_name) + 1
 
-    df_trans = st.session_state.df_transaksi.copy()
+    df_trans = df_transaksi.copy()
     if not df_trans.empty and 'Tanggal' in df_trans.columns:
         df_trans['Tanggal_DT'] = pd.to_datetime(df_trans['Tanggal'])
         df_filtered = df_trans[(df_trans['Tanggal_DT'].dt.year == selected_year) & (df_trans['Tanggal_DT'].dt.month == month_idx)]
@@ -88,12 +85,15 @@ with tab1:
     st.markdown("---")
     st.subheader(f"Breakdown Alokasi vs Realisasi - {selected_month_name} {selected_year}")
 
-    df_kat_exp = st.session_state.df_kategori[st.session_state.df_kategori['Tipe'] == 'Pengeluaran']
+    df_kat_exp = df_kategori[df_kategori['Tipe'] == 'Pengeluaran']
     
     breakdown_data = []
     for _, row in df_kat_exp.iterrows():
         kat = row['Kategori']
-        pct = row['Persentase']
+        pct_raw = row['Persentase']
+        # Mengatasi input persentase angka bulat (misal 40%) maupun desimal (misal 0.40)
+        pct = (pct_raw / 100.0) if pct_raw > 1.0 else pct_raw
+        
         alokasi_val = total_income * pct
         realisasi_val = df_filtered[(df_filtered['Tipe'] == 'Pengeluaran') & (df_filtered['Kategori'] == kat)]['Jumlah'].sum() if not df_filtered.empty else 0.0
         persen_realisasi = (realisasi_val / alokasi_val * 100) if alokasi_val > 0 else 0
@@ -124,8 +124,8 @@ with tab1:
 with tab2:
     st.title("➕ Input Transaksi Baru")
     
-    list_pemasukan = st.session_state.df_kategori[st.session_state.df_kategori['Tipe'] == 'Pemasukan']['Kategori'].tolist()
-    list_pengeluaran = st.session_state.df_kategori[st.session_state.df_kategori['Tipe'] == 'Pengeluaran']['Kategori'].tolist()
+    list_pemasukan = df_kategori[df_kategori['Tipe'] == 'Pemasukan']['Kategori'].tolist()
+    list_pengeluaran = df_kategori[df_kategori['Tipe'] == 'Pengeluaran']['Kategori'].tolist()
 
     tipe_pilihan = st.radio("Pilih Tipe Transaksi:", ["Pengeluaran", "Pemasukan"], horizontal=True)
 
@@ -155,9 +155,8 @@ with tab2:
                 'Keterangan': keterangan,
                 'Bank': bank
             }])
-            updated_df = pd.concat([st.session_state.df_transaksi, new_row], ignore_index=True)
+            updated_df = pd.concat([df_transaksi, new_row], ignore_index=True)
             save_transaksi(updated_df)
-            st.session_state.df_transaksi = updated_df
             st.success(f"✅ Transaksi ({kategori} - Rp {jumlah:,.0f}) berhasil disimpan ke Google Sheets!")
             st.rerun()
 
@@ -172,7 +171,7 @@ with tab2:
 
     edit_month_idx = BULAN_LIST.index(filter_edit_month) + 1
 
-    df_full = st.session_state.df_transaksi.copy()
+    df_full = df_transaksi.copy()
     if not df_full.empty and 'Tanggal' in df_full.columns:
         df_full['Tanggal_DT'] = pd.to_datetime(df_full['Tanggal'])
         df_month_subset = df_full[
@@ -206,7 +205,6 @@ with tab2:
         
         final_df = pd.concat([df_other_months, edited_subset], ignore_index=True)
         save_transaksi(final_df)
-        st.session_state.df_transaksi = final_df
         st.success("✅ Data transaksi berhasil diperbarui!")
         st.rerun()
 
@@ -217,23 +215,19 @@ with tab3:
     st.title("⚙️ Pengaturan Kategori & Persentase Alokasi")
     
     edited_kategori = st.data_editor(
-        st.session_state.df_kategori,
+        df_kategori,
         num_rows="dynamic",
         use_container_width=True,
         column_config={
             "Tipe": st.column_config.SelectboxColumn("Tipe Transaksi", options=["Pemasukan", "Pengeluaran"]),
             "Kategori": st.column_config.TextColumn("Nama Kategori"),
-            "Persentase": st.column_config.NumberColumn("Persentase (contoh: 0.10 untuk 10%)", format="%.2f", min_value=0.0, max_value=1.0)
+            "Persentase": st.column_config.NumberColumn("Persentase (contoh: 10 untuk 10%)", format="%.2f", min_value=0.0)
         },
         key="editor_kategori"
     )
 
-    total_pct = edited_kategori[edited_kategori['Tipe'] == 'Pengeluaran']['Persentase'].sum() * 100
-    st.info(f"Total Persentase Alokasi Pengeluaran: **{total_pct:.1f}%**")
-
     if st.button("💾 Simpan Pengaturan Kategori"):
         save_kategori(edited_kategori)
-        st.session_state.df_kategori = edited_kategori
         st.success("✅ Daftar kategori berhasil disimpan!")
         st.rerun()
 
@@ -249,7 +243,7 @@ with tab4:
     with col_rf2:
         filter_riwayat_month = st.selectbox("Filter Bulan", ["Semua Bulan"] + BULAN_LIST, index=9, key="riwayat_month")
 
-    df_riwayat = st.session_state.df_transaksi.copy()
+    df_riwayat = df_transaksi.copy()
     
     if not df_riwayat.empty and 'Tanggal' in df_riwayat.columns:
         df_riwayat['Tanggal_DT'] = pd.to_datetime(df_riwayat['Tanggal'])
